@@ -18,12 +18,25 @@ def read_csv_file(csv_path):
             codes.append(row)
     return codes
 
+def load_country_mapping(data_dir):
+    """Load country code to name mapping from countries.csv."""
+    countries_file = data_dir / 'countries.csv'
+    country_map = {}
+
+    if countries_file.exists():
+        with open(countries_file, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                country_map[row['country_code']] = row['country']
+
+    return country_map
+
 def get_country_name(filename):
     """Extract country name from filename (e.g., t35_usa.csv -> USA)."""
     name = filename.stem.replace('t35_', '')
     return name.upper()
 
-def generate_html(data_by_country):
+def generate_html(data_by_country, country_map):
     """Generate complete HTML page with all T.35 codes."""
 
     # Calculate total codes
@@ -31,6 +44,22 @@ def generate_html(data_by_country):
 
     # Prepare JSON data for JavaScript
     json_data = json.dumps(data_by_country, indent=2)
+
+    # Build country cards HTML
+    country_cards_html = ''
+    for country_key in sorted(data_by_country.keys()):
+        codes = data_by_country[country_key]
+        country_code = codes[0]['Country Code']
+        # Use the mapping to get the full country name, or fallback to uppercase key
+        country_name = country_map.get(country_code, country_key.upper())
+        code_count = len(codes)
+
+        country_cards_html += f'''
+                <div class="country-card" data-country="{country_key.lower()}">
+                    <div class="country-card-name">{country_name}</div>
+                    <div class="country-card-code">{country_code}</div>
+                    <div class="country-card-count">{code_count} manufacturer codes</div>
+                </div>'''
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -303,6 +332,64 @@ def generate_html(data_by_country):
             width: 24px;
             height: 24px;
         }}
+
+        .countries-overview {{
+            background: var(--surface);
+            padding: 25px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+            border: 1px solid var(--border);
+        }}
+
+        .countries-overview h2 {{
+            font-size: 1.3rem;
+            margin-bottom: 15px;
+            color: var(--text-primary);
+        }}
+
+        .country-cards {{
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 15px;
+        }}
+
+        .country-card {{
+            background: white;
+            padding: 15px 20px;
+            border-radius: 6px;
+            border: 2px solid var(--border);
+            transition: all 0.2s;
+            cursor: pointer;
+        }}
+
+        .country-card:hover {{
+            border-color: var(--primary-color);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }}
+
+        .country-card-name {{
+            font-weight: 600;
+            font-size: 1.1rem;
+            margin-bottom: 8px;
+            color: var(--text-primary);
+        }}
+
+        .country-card-code {{
+            display: inline-block;
+            background: var(--primary-color);
+            color: white;
+            padding: 3px 10px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.85rem;
+            margin-bottom: 8px;
+        }}
+
+        .country-card-count {{
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }}
     </style>
 </head>
 <body>
@@ -336,11 +423,18 @@ def generate_html(data_by_country):
             </div>
         </header>
 
+        <div class="countries-overview">
+            <h2>Available Countries</h2>
+            <div class="country-cards">
+{country_cards_html}
+            </div>
+        </div>
+
         <div class="controls">
             <input type="text" id="searchBox" class="search-box" placeholder="Search by manufacturer name or code...">
             <div class="filter-buttons">
                 <button class="filter-btn active" data-country="all">All Countries</button>
-                {''.join(f'<button class="filter-btn" data-country="{country.lower()}">{country}</button>' for country in sorted(data_by_country.keys()))}
+                {''.join(f'<button class="filter-btn" data-country="{country_key.lower()}">{country_map.get(data_by_country[country_key][0]["Country Code"], country_key.upper())}</button>' for country_key in sorted(data_by_country.keys()))}
             </div>
         </div>
 
@@ -357,14 +451,16 @@ def generate_html(data_by_country):
 
     <script>
         const data = {json_data};
+        const countryMap = {json.dumps(country_map, indent=2)};
 
         function renderTable(country, codes) {{
             const countryCode = codes[0]['Country Code'];
+            const countryName = countryMap[countryCode] || country.toUpperCase();
             const html = `
                 <div class="country-section" data-country="${{country.toLowerCase()}}">
                     <div class="country-header">
                         <h2 class="country-name">
-                            ${{country}}
+                            ${{countryName}}
                             <span class="country-code">${{countryCode}}</span>
                         </h2>
                         <div class="code-count">${{codes.length}} manufacturer codes</div>
@@ -472,6 +568,32 @@ def generate_html(data_by_country):
                 filterByCountry(btn.dataset.country);
             }});
         }});
+
+        // Country cards - click to filter
+        const countryCards = document.querySelectorAll('.country-card');
+        countryCards.forEach(card => {{
+            card.addEventListener('click', () => {{
+                const country = card.dataset.country;
+
+                // Update filter button active state
+                filterButtons.forEach(b => {{
+                    if (b.dataset.country === country) {{
+                        b.classList.add('active');
+                    }} else {{
+                        b.classList.remove('active');
+                    }}
+                }});
+
+                // Reset search
+                searchBox.value = '';
+
+                // Filter to selected country
+                filterByCountry(country);
+
+                // Scroll to content
+                document.getElementById('content').scrollIntoView({{ behavior: 'smooth' }});
+            }});
+        }});
     </script>
 </body>
 </html>"""
@@ -487,6 +609,10 @@ def main():
     if not data_dir.exists():
         print(f"Error: Data directory not found at {data_dir}")
         return
+
+    # Load country mapping
+    country_map = load_country_mapping(data_dir)
+    print(f"Loaded {len(country_map)} country mappings")
 
     # Read all CSV files
     data_by_country = {}
@@ -504,7 +630,7 @@ def main():
         print(f"  - {csv_file.name}: {len(codes)} codes")
 
     # Generate HTML
-    html_content = generate_html(data_by_country)
+    html_content = generate_html(data_by_country, country_map)
 
     # Write to index.html
     output_file = script_dir / 'index.html'
@@ -513,6 +639,7 @@ def main():
 
     print(f"\nGenerated: {output_file}")
     print(f"Total codes: {sum(len(codes) for codes in data_by_country.values())}")
+    print(f"Countries: {len(data_by_country)}")
 
 if __name__ == '__main__':
     main()
